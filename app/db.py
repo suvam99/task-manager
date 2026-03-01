@@ -9,7 +9,7 @@ def get_connection():
             user="taskuser",
             password="0908",
             host="localhost",
-            port="5432"
+            port="5432",
         )
         return conn
     except OperationalError as e:
