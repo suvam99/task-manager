@@ -1,9 +1,34 @@
+import datetime
+
+import bcrypt
 from flask import Flask, jsonify
+import jwt
 from db import get_connection
 from flask import request
 
 
 app = Flask(__name__)
+
+
+def verify_token():
+    auth_header = request.headers.get("Authorization")
+
+    if not auth_header:
+        return None, {"error": "Authorization header missing"}, 401
+
+    try:
+        token = auth_header.split(" ")[1]
+    except IndexError:
+        return None, {"error": "Invalid Authorization header"}, 401
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_id = payload["user_id"]
+        return user_id, None, None
+    except jwt.ExpiredSignatureError:
+        return None, {"error": "Token expired"}, 401
+    except jwt.InvalidTokenError:
+        return None, {"error": "Invalid token"}, 401
 
 
 @app.route("/", methods=["GET"])
@@ -23,7 +48,10 @@ def health():
 
 @app.route("/tasks", methods=["GET"])
 def get_tasks():
-    user_id = request.args.get("user_id")
+    user_id, error, status = verify_token()
+
+    if error:
+        return error, status
 
     conn = get_connection()
     if not conn:
@@ -60,11 +88,14 @@ def get_tasks():
 
 @app.route("/tasks", methods=["POST"])
 def create_task():
+    user_id, error, status = verify_token()
+
+    if error:
+        return error, status
     data = request.get_json()
 
     title = data.get("title")
     description = data.get("description")
-    user_id = data.get("user_id")
 
     if not title:
         return {"error": "Title is required"}, 400
@@ -100,13 +131,14 @@ def create_task():
 
 @app.route("/tasks/<int:id>", methods=["PUT"])
 def update_task(id):
+    user_id, error, status = verify_token()
+
+    if error:
+        return error, status
+
     data = request.get_json()
     if not data:
         return {"error": "Invalid JSON"}, 400
-
-    user_id = data.get("user_id")
-    if not user_id:
-        return {"error": "User ID is required"}, 400
 
     conn = get_connection()
     if not conn:
@@ -161,9 +193,10 @@ def update_task(id):
 
 @app.route("/tasks/<int:id>", methods=["DELETE"])
 def delete_task(id):
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return {"error": "User ID is required"}, 400
+    user_id, error, status = verify_token()
+
+    if error:
+        return error, status
 
     conn = get_connection()
     if not conn:
@@ -208,6 +241,8 @@ def create_users():
     if not username or not email or not password:
         return {"error": "All fields are required"}, 400
 
+    hassed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -216,7 +251,7 @@ def create_users():
             VALUES (%s, %s, %s)
             RETURNING id
             """,
-            (username, email, password),
+            (username, email, hassed_password.decode('utf-8')),
         )
         user_id = cursor.fetchone()[0]
         conn.commit()
@@ -231,6 +266,57 @@ def create_users():
 
     return {"id": user_id, "username": username}, 201
 
+
+SECRET_KEY = "secret_key"
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    if not data:
+        return {"error": "Invalid JSON"}, 400
+
+    identifier = data.get("user")
+    password = data.get("password")
+
+    if not identifier or not password:
+        return {"error": "Identifier and password required"}, 400
+
+    conn = get_connection()
+    if not conn:
+        return {"error": "Database connection failed"}, 500
+
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "SELECT id, password_hash FROM users WHERE username = %s OR email = %s",
+            (identifier, identifier),
+        )
+
+        row = cursor.fetchone()
+
+        if not row:
+            return {"error": "Invalid credentials"}, 401
+
+        user_id, stored_hash = row
+
+        if not bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8")):
+            return {"error": "Invalid credentials"}, 401
+
+        payload = {
+            "user_id": user_id,
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+        }
+
+        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+        return {
+            "message": "Login successful",
+            "access_token": token
+        }, 200
+
+    finally:
+        cursor.close()
+        conn.close()
 
 if __name__ == "__main__":
     app.run(debug=True)
