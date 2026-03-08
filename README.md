@@ -6,6 +6,7 @@ Backend service for managing tasks with authentication and role-based access.
 - Python
 - Flask
 - PostgreSQL
+- JWT
 
 ## Status
 Project initialized. Core backend setup in progress.
