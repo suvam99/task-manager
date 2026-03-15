@@ -77,14 +77,10 @@ def get_tasks():
         return {"error": "Database not connected"}, 500
     cursor = conn.cursor()
     try:
-        if user_id:
-            cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
-            if not cursor.fetchone():
-                return {"error": "No user found"}, 404
-            cursor.execute(
-                "SELECT id, title, description, status FROM tasks WHERE user_id = %s;",
-                (user_id,),
-            )
+        cursor.execute(
+            "SELECT id, title, description, status FROM tasks WHERE user_id = %s;",
+            (user_id,),
+        )
         rows = cursor.fetchall()
         if not rows:
             return [], 200
@@ -126,10 +122,6 @@ def create_task():
 
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id FROM users WHERE id = %s", [user_id])
-        if not cursor.fetchone():
-            return {"error": "User not found", "user_id": user_id}, 404
-
         cursor.execute(
             "INSERT INTO tasks (title, description,user_id) VALUES (%s, %s, %s) RETURNING id;",
             (title, description, user_id),
