@@ -1,6 +1,7 @@
 import bcrypt
 from flask import Blueprint, request
 
+from config import VALID_STATUS
 from auth import verify_password, generate_token, verify_token
 from db import get_connection
 
@@ -72,18 +73,46 @@ def get_tasks():
     if error:
         return error, status
 
+    page = max(1, int(request.args.get("page", 1)))
+    limit = max(1, min(50, int(request.args.get("limit", 10))))
+
+    offset = (page - 1) * limit
+
+    status_filter = request.args.get("status")
+    if status_filter and status_filter not in VALID_STATUS:
+        return {"error": "Invalid status filter"}, 400
+
     conn = get_connection()
     if not conn:
         return {"error": "Database not connected"}, 500
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "SELECT id, title, description, status FROM tasks WHERE user_id = %s;",
-            (user_id,),
-        )
+        if status_filter:
+            cursor.execute(
+                """
+                SELECT id, title, description, status
+                FROM tasks
+                WHERE user_id = %s AND status = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """,
+                (user_id, status_filter, limit, offset),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, title, description, status
+                FROM tasks
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """,
+                (user_id, limit, offset),
+            )
+
         rows = cursor.fetchall()
         if not rows:
-            return [], 200
+            return {"page": page, "limit": limit, "tasks": []}, 200
     except Exception:
         return {"error": "Failed to fetch tasks"}, 500
     finally:
@@ -96,7 +125,7 @@ def get_tasks():
             {"id": row[0], "title": row[1], "description": row[2], "status": row[3]}
         )
 
-    return tasks, 200
+    return {"page": page, "limit": limit, "tasks": tasks}, 200
 
 
 @bp.route("/tasks", methods=["POST"])
@@ -112,9 +141,6 @@ def create_task():
 
     if not title:
         return {"error": "Title is required"}, 400
-
-    if not user_id:
-        return {"error": "User ID is required"}, 400
 
     conn = get_connection()
     if not conn:
@@ -148,6 +174,9 @@ def update_task(id):
     data = request.get_json()
     if not data:
         return {"error": "Invalid JSON"}, 400
+    
+    if "status" in data and data["status"] not in VALID_STATUS:
+        return {"error": "Invalid status"}, 400
 
     conn = get_connection()
     if not conn:
@@ -250,7 +279,7 @@ def create_users():
     if not username or not email or not password:
         return {"error": "All fields are required"}, 400
 
-    hassed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+    hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
 
     cursor = conn.cursor()
     try:
@@ -260,7 +289,7 @@ def create_users():
             VALUES (%s, %s, %s)
             RETURNING id
             """,
-            (username, email, hassed_password.decode("utf-8")),
+            (username, email, hashed_password.decode("utf-8")),
         )
         user_id = cursor.fetchone()[0]
         conn.commit()
